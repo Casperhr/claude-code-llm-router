@@ -1,0 +1,31 @@
+# Build artifacts
+app/.build/
+app/.swiftpm/
+
+# Model weights (large files)
+gguf/*.gguf
+gguf/.cache/
+models--*/
+
+# HuggingFace cache
+xet/
+.cache/
+
+# macOS
+.DS_Store
+*.xcodeproj
+xcuserdata/
+
+# Environment / secrets
+.env
+*.plist
+
+# Logs
+*.log
+
+# Preferences (user-specific)
+.menubar_prefs.json
+app/.menubar_prefs.json
+
+# Lock files (user-specific model cache)
+.locks/
