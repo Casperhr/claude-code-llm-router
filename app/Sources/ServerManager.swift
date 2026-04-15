@@ -22,6 +22,7 @@ enum ModelBackend: String {
     case openrouter      // cloud via OpenRouter proxy
     case smartrouter     // hybrid: local + Sonnet + Opus
     case cloudrouter     // cloud-only: Qwen + Flash + Sonnet + Opus
+    case ollama          // local via Ollama
 }
 
 struct LocalModel {
@@ -87,6 +88,8 @@ class ServerManager {
 
     private static let ggufDir = baseDir.appendingPathComponent("gguf")
 
+    private static let ollamaProxyScript = baseDir.appendingPathComponent("app/ollama-proxy.py").path
+
     private static let proxyScript = baseDir.appendingPathComponent("app/openrouter-proxy.py").path
 
     private static let smartProxyScript = baseDir.appendingPathComponent("app/smart-proxy.py").path
@@ -148,6 +151,7 @@ class ServerManager {
         case .openrouter: backend = "OpenRouter"
         case .smartrouter: backend = "Smart Router"
         case .cloudrouter: backend = "Cloud Router"
+        case .ollama: backend = "Ollama"
         }
         switch state {
         case .stopped:
@@ -274,6 +278,29 @@ class ServerManager {
         ]
     }
 
+    /// Ollama models — queries http://localhost:11434/api/tags synchronously
+    func availableOllamaModels() -> [LocalModel] {
+        guard let url = URL(string: "http://localhost:11434/api/tags") else { return [] }
+        var request = URLRequest(url: url, timeoutInterval: 1.0)
+        request.httpMethod = "GET"
+        var result: [LocalModel] = []
+        let sem = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            defer { sem.signal() }
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let models = json["models"] as? [[String: Any]] else { return }
+            for m in models {
+                guard let name = m["name"] as? String else { continue }
+                let size = m["size"] as? UInt64
+                let short = name.replacingOccurrences(of: ":latest", with: "")
+                result.append(LocalModel(shortName: short, fullName: name, path: name, backend: .ollama, sizeBytes: size))
+            }
+        }.resume()
+        sem.wait()
+        return result
+    }
+
     /// Models that require upstream llama.cpp (no TurboQuant KV cache support yet)
     private static let upstreamOnlyPatterns = ["gemma-4", "gemma4"]
 
@@ -397,6 +424,7 @@ class ServerManager {
             case .openrouter: logPath = "/tmp/openrouter-proxy.log"
             case .smartrouter: logPath = "/tmp/smart-router.log"
             case .cloudrouter: logPath = "/tmp/cloud-router.log"
+            case .ollama: logPath = "/tmp/ollama-proxy.log"
             default: logPath = Self.logFile
             }
             FileManager.default.createFile(atPath: logPath, contents: nil)
@@ -474,6 +502,14 @@ class ServerManager {
                     Self.cloudSmartProxyScript,
                     "\(self.port)",
                     cloudApiKey
+                ]
+
+            case .ollama:
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+                proc.arguments = [
+                    Self.ollamaProxyScript,
+                    "\(self.port)",
+                    model.path  // Ollama model name (e.g. "gemma4:e4b")
                 ]
             }
 

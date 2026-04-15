@@ -29,24 +29,33 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5005
 API_KEY = sys.argv[2] if len(sys.argv) > 2 else ""
 
 OPENROUTER_BASE = "https://openrouter.ai/api"
+LOCAL_BASE = "http://localhost:4000"  # Ollama proxy (gemma4:e4b)
 
 # Model tiers
 MODELS = {
-    "qwen":   "qwen/qwen3-coder-30b-a3b-instruct",  # 256K context, good tool calling
+    "local":  "gemma4:e4b",                           # Local Ollama — free
     "flash":  "google/gemini-2.5-flash",              # 1M context
     "sonnet": "anthropic/claude-sonnet-4",             # 250K context
     "opus":   "anthropic/claude-opus-4",               # 1M context
 }
 
 TIER_LABELS = {
-    "qwen": "Q",
+    "local": "L",
     "flash": "F",
     "sonnet": "S",
     "opus": "O",
 }
 
 # Cost per 1M tokens (blended input+output estimate)
-COST_PER_M = {"qwen": 0.16, "flash": 1.40, "sonnet": 6.0, "opus": 45.0}
+COST_PER_M = {"local": 0.0, "flash": 1.40, "sonnet": 6.0, "opus": 45.0}
+
+def _check_local_available():
+    try:
+        req = urllib.request.Request(f"{LOCAL_BASE}/health")
+        urllib.request.urlopen(req, timeout=1)
+        return True
+    except Exception:
+        return False
 
 # --- Stats ---
 _lock = threading.Lock()
@@ -128,13 +137,15 @@ def classify(body):
             ]
             text_len = sum(len(b.get("text", "")) for b in text_blocks)
 
-            # Pure tool results
+            # Pure tool results — route local if available, else flash
             if tool_results > 0 and len(text_blocks) == 0:
-                return "qwen", f"tool_results={tool_results}"
+                tier = "local" if _check_local_available() else "flash"
+                return tier, f"tool_results={tool_results}"
 
             # Tool results + short user text ("yes", "ok", "continue")
             if tool_results > 0 and text_len < 80:
-                return "qwen", f"tool_results={tool_results},text={text_len}"
+                tier = "local" if _check_local_available() else "flash"
+                return tier, f"tool_results={tool_results},text={text_len}"
 
     # Extract user text
     user_text = ""
@@ -181,7 +192,8 @@ def classify(body):
 
     # Short continuation in ongoing conversation
     if len(user_text) < 200 and len(messages) > 4:
-        return "qwen", f"short_continuation={len(user_text)}"
+        tier = "local" if _check_local_available() else "flash"
+        return tier, f"short_continuation={len(user_text)}"
 
     # Default
     return "flash", "default"
@@ -229,6 +241,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self._respond(200, {"status": "ok"})
+        elif self.path == "/model":
+            self._respond(200, {"model": "Cloud Router"})
         elif self.path == "/v1/models":
             self._respond(200, {
                 "object": "list",
@@ -262,6 +276,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         model = MODELS[tier]
         body = sanitize_messages(body)
         body["model"] = model
+        # Strip Claude Code features OpenRouter doesn't support
+        for key in ("betas", "anthropic_beta", "context_management", "output_config", "thinking"):
+            body.pop(key, None)
         t0 = time.time()
         approx_tok = estimate_tokens(body)
 
@@ -279,7 +296,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         print(
             f"[{label}] #{req_num} {reason:<32s} → {model.split('/')[-1]:<20s} "
-            f"[{_stats['qwen']}Q {_stats['flash']}F {_stats['sonnet']}S {_stats['opus']}O] "
+            f"[{_stats['local']}L {_stats['flash']}F {_stats['sonnet']}S {_stats['opus']}O] "
             f"${total_cost:.3f} spent  ${saved:.3f} saved",
             flush=True,
         )
@@ -289,13 +306,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _forward(self, body, tier, t0):
         encoded = json.dumps(body).encode()
         is_stream = body.get("stream", False)
-        target = OPENROUTER_BASE + "/v1/messages"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {API_KEY}",
-            "HTTP-Referer": "https://claudecode.local",
-            "X-Title": "Claude Code Cloud Router",
-        }
+
+        if tier == "local":
+            target = LOCAL_BASE + "/v1/messages"
+            headers = {"Content-Type": "application/json"}
+        else:
+            target = OPENROUTER_BASE + "/v1/messages"
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {API_KEY}",
+                "HTTP-Referer": "https://claudecode.local",
+                "X-Title": "Claude Code Cloud Router",
+            }
         req = urllib.request.Request(target, data=encoded, headers=headers, method="POST")
 
         try:
@@ -328,7 +350,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         except urllib.error.HTTPError as e:
             # If cheap model fails, escalate to next tier
-            fallback = {"qwen": "flash", "flash": "sonnet"}.get(tier)
+            fallback = {"local": "flash", "flash": "sonnet"}.get(tier)
             if fallback and e.code >= 500:
                 print(f"[!] {tier} failed ({e.code}), escalating to {fallback}", flush=True)
                 body["model"] = MODELS[fallback]
@@ -398,7 +420,7 @@ if __name__ == "__main__":
     print(f"╔══════════════════════════════════════════╗", flush=True)
     print(f"║       Cloud Smart Router v1.0            ║", flush=True)
     print(f"╠══════════════════════════════════════════╣", flush=True)
-    print(f"║  Tool calls:  Qwen3 32B       $0.16/M   ║", flush=True)
+    print(f"║  Tool calls:  gemma4:e4b      FREE      ║", flush=True)
     print(f"║  Fast:        Gemini 2.5 Flash $1.40/M   ║", flush=True)
     print(f"║  Coding:      Claude Sonnet    $6.00/M   ║", flush=True)
     print(f"║  Complex:     Claude Opus     $45.00/M   ║", flush=True)

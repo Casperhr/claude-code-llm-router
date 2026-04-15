@@ -196,6 +196,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             case .openrouter: backendTag = "OpenRouter"
             case .smartrouter: backendTag = "Smart Router"
             case .cloudrouter: backendTag = "Cloud Router"
+            case .ollama: backendTag = "Ollama"
             }
             var stats: [String] = [backendTag]
             if isRouter {
@@ -434,6 +435,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
+        // Ollama models
+        let ollamaModels = server.availableOllamaModels()
+        if !ollamaModels.isEmpty {
+            let ollamaLabel = NSMenuItem(title: "Ollama (local)", action: nil, keyEquivalent: "")
+            ollamaLabel.isEnabled = false
+            menu.addItem(ollamaLabel)
+
+            for model in ollamaModels {
+                let sizeStr = model.sizeLabel.isEmpty ? "" : "  \(model.sizeLabel)"
+                let item = NSMenuItem(title: "  \(model.shortName)\(sizeStr)", action: #selector(selectModel(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = model.path
+                if server.activeModelName == model.shortName && server.activeBackend == .ollama {
+                    item.state = .on
+                }
+                menu.addItem(item)
+            }
+
+            menu.addItem(.separator())
+        }
+
         // Smart Router
         let smartModels = server.availableSmartRouterModels()
         let smartLabel = NSMenuItem(title: "Smart Router", action: nil, keyEquivalent: "")
@@ -531,7 +553,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func selectModel(_ sender: NSMenuItem) {
         guard let path = sender.representedObject as? String else { return }
-        let allModels = server.availableGGUFModels() + server.availableMLXModels() + server.availableSmartRouterModels() + server.availableOpenRouterModels()
+        let allModels = server.availableGGUFModels() + server.availableMLXModels() + server.availableOllamaModels() + server.availableSmartRouterModels() + server.availableOpenRouterModels()
         guard let model = allModels.first(where: { $0.path == path }) else { return }
         server.serve(model: model)
     }

@@ -13,8 +13,9 @@ Port 5005 -- managed by this app
     |
     |-- Local GGUF models     --> llama.cpp / llama-server
     |-- Local MLX models      --> server/serve_mlx.py
+    |-- Ollama models         --> app/ollama-proxy.py --> Ollama :11434
     |-- Smart Router          --> local model + Sonnet + Opus (hybrid)
-    |-- Cloud Router          --> Qwen + Gemini Flash + Sonnet + Opus (all cloud)
+    |-- Cloud Router          --> Gemma4 (free) + Gemini Flash + Sonnet + Opus
     '-- OpenRouter            --> any OpenRouter model (single model proxy)
 ```
 
@@ -22,9 +23,10 @@ Click a model in the menu bar. The app kills the current server, starts the new 
 
 ## Features
 
-- **One-click model switching** -- TurboQuant GGUF, upstream GGUF, MLX, OpenRouter, Smart Router
+- **One-click model switching** -- TurboQuant GGUF, upstream GGUF, MLX, Ollama, OpenRouter, Smart Router
 - **Smart Router** -- routes 70% of Claude Code requests (tool calls) to free local model, only uses Sonnet/Opus when needed. ~85% cost reduction.
-- **Cloud Router** -- same routing logic, all cloud (Qwen + Gemini Flash + Sonnet + Opus). No local GPU needed.
+- **Cloud Router** -- same routing logic, free local tier via Ollama (gemma4:e4b) + cloud fallback. No big GPU needed.
+- **Ollama support** -- run any Ollama model (gemma4, llama4, etc.) as a Claude Code backend on any Mac with 16GB+ RAM.
 - **Live menu bar stats** -- tok/s, memory, CPU, GPU for local models; request count, cost, savings % for routers
 - **Analytics panel** -- TTFT, generation speed, token counts
 - **Auto-detects backend** -- llama.cpp vs MLX vs proxy
@@ -37,6 +39,7 @@ Click a model in the menu bar. The app kills the current server, starts the new 
 - One or more of:
   - [llama.cpp](https://github.com/ggml-org/llama.cpp) -- for GGUF models
   - [MLX](https://github.com/ml-explore/mlx) + [mlx-lm](https://github.com/ml-explore/mlx-examples) -- for MLX models
+  - [Ollama](https://ollama.com) -- for Ollama models (gemma4, llama4, etc.), 16GB+ RAM
   - [OpenRouter API key](https://openrouter.ai/) -- for cloud models and Smart/Cloud Router
 
 ## Quick Start
@@ -95,7 +98,8 @@ echo "OPENROUTER_API_KEY=sk-or-your-key-here" > ~/llm-router/.env
       ServerManager.swift         <-- server lifecycle, health, metrics
     Package.swift                 <-- Swift package manifest
     smart-proxy.py                <-- hybrid router (local + cloud)
-    cloud-smart-proxy.py          <-- cloud-only router
+    cloud-smart-proxy.py          <-- cloud-only router (free local tier via Ollama)
+    ollama-proxy.py               <-- Anthropic↔Ollama translation proxy
     openrouter-proxy.py           <-- single-model OpenRouter proxy
     icon.png
   server/
@@ -131,14 +135,25 @@ Same routing logic, but uses cheap cloud models instead of local:
 
 | Tier | Model | Cost/M tokens |
 |------|-------|---------------|
-| Tool calls | Qwen3 Coder 30B | $0.17 |
+| Tool calls | gemma4:e4b (local Ollama) | Free |
 | Fast | Gemini 2.5 Flash | $1.40 |
 | Coding | Claude Sonnet | $6.00 |
 | Complex | Claude Opus | $45.00 |
 
-No GPU required. Auto-escalates if a cheap model fails.
+Requires [Ollama](https://ollama.com) + `ollama pull gemma4:e4b` for the free local tier (falls back to Gemini Flash if Ollama is unavailable). Auto-escalates if a model fails.
+
+→ **[Getting Started: Gemma 4 with Ollama](docs/getting-started-gemma4-ollama.md)**
 
 ## Adding Models
+
+### Ollama models (easiest — works on any Mac with 16GB+ RAM)
+```bash
+brew install ollama && brew services start ollama
+ollama pull gemma4:e4b   # 9.6 GB, recommended
+```
+Click the menu bar icon → **Ollama (local)** → select the model.
+
+See [Getting Started: Gemma 4 with Ollama](docs/getting-started-gemma4-ollama.md) for the full walkthrough.
 
 ### GGUF models
 ```bash
